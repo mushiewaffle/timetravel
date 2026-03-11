@@ -13,7 +13,10 @@ import (
 
 // SQLiteRecordService is a SQLite-backed implementation of RecordService and VersionedRecordService.
 //
-// It persists each record update as an immutable version snapshot.
+// Data model (simple, auditable):
+// - Each record update is persisted as an immutable snapshot row.
+// - A record's current state is the latest snapshot by version.
+// - History/time-travel is supported by reading older snapshots.
 type SQLiteRecordService struct {
 	db *sql.DB
 }
@@ -40,6 +43,9 @@ func (s *SQLiteRecordService) Close() error {
 }
 
 func (s *SQLiteRecordService) ensureSchema(ctx context.Context) error {
+	// record_versions holds all record history.
+	//
+	// created_at is stored as an RFC3339Nano string for easy ordering/comparison.
 	stmts := []string{
 		`CREATE TABLE IF NOT EXISTS record_versions (
 			record_id INTEGER NOT NULL,
@@ -62,6 +68,7 @@ func (s *SQLiteRecordService) ensureSchema(ctx context.Context) error {
 }
 
 func (s *SQLiteRecordService) GetRecord(ctx context.Context, id int) (entity.Record, error) {
+	// v1 semantics: return only the latest state (no version metadata).
 	if id <= 0 {
 		return entity.Record{}, ErrRecordIDInvalid
 	}
@@ -75,6 +82,8 @@ func (s *SQLiteRecordService) GetRecord(ctx context.Context, id int) (entity.Rec
 }
 
 func (s *SQLiteRecordService) CreateRecord(ctx context.Context, record entity.Record) error {
+	// v1 create semantics: create the record if it doesn't exist.
+	// This inserts version=1.
 	id := record.ID
 	if id <= 0 {
 		return ErrRecordIDInvalid
@@ -107,6 +116,8 @@ func (s *SQLiteRecordService) CreateRecord(ctx context.Context, record entity.Re
 }
 
 func (s *SQLiteRecordService) UpdateRecord(ctx context.Context, id int, updates map[string]*string) (entity.Record, error) {
+	// v1 update semantics: the record must already exist.
+	// We write a new snapshot version and return the new latest state.
 	if id <= 0 {
 		return entity.Record{}, ErrRecordIDInvalid
 	}
@@ -120,10 +131,12 @@ func (s *SQLiteRecordService) UpdateRecord(ctx context.Context, id int, updates 
 }
 
 func (s *SQLiteRecordService) GetLatestRecord(ctx context.Context, id int) (entity.Record, error) {
+	// v2 helper: explicitly named "latest".
 	return s.GetRecord(ctx, id)
 }
 
 func (s *SQLiteRecordService) GetRecordVersion(ctx context.Context, id int, version int) (entity.Record, error) {
+	// v2 explicit version read.
 	if id <= 0 {
 		return entity.Record{}, ErrRecordIDInvalid
 	}
@@ -140,6 +153,7 @@ func (s *SQLiteRecordService) GetRecordVersion(ctx context.Context, id int, vers
 }
 
 func (s *SQLiteRecordService) GetRecordAt(ctx context.Context, id int, at time.Time) (entity.Record, error) {
+	// v2 time-travel read: returns the latest version whose created_at <= at.
 	if id <= 0 {
 		return entity.Record{}, ErrRecordIDInvalid
 	}
@@ -153,6 +167,7 @@ func (s *SQLiteRecordService) GetRecordAt(ctx context.Context, id int, at time.T
 }
 
 func (s *SQLiteRecordService) ListRecordVersions(ctx context.Context, id int) ([]entity.RecordVersion, error) {
+	// v2 history listing.
 	if id <= 0 {
 		return nil, ErrRecordIDInvalid
 	}
@@ -194,6 +209,8 @@ func (s *SQLiteRecordService) ListRecordVersions(ctx context.Context, id int) ([
 }
 
 func (s *SQLiteRecordService) ApplyUpdate(ctx context.Context, id int, updates map[string]*string) (entity.VersionedRecord, error) {
+	// v2 update semantics: apply updates to the latest snapshot and create a new snapshot version.
+	// If the record doesn't exist yet, this creates version=1.
 	if id <= 0 {
 		return entity.VersionedRecord{}, ErrRecordIDInvalid
 	}
@@ -201,6 +218,11 @@ func (s *SQLiteRecordService) ApplyUpdate(ctx context.Context, id int, updates m
 }
 
 func (s *SQLiteRecordService) applyUpdate(ctx context.Context, id int, updates map[string]*string, createIfMissing bool) (entity.VersionedRecord, error) {
+	// Core write path.
+	//
+	// We use a transaction so that:
+	// - we read the latest version and write the next version atomically
+	// - concurrent writers won't accidentally produce duplicate versions
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return entity.VersionedRecord{}, err

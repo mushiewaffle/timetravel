@@ -11,6 +11,11 @@ import (
 // POST /records/{id}
 // Applies updates to the latest version and persists a new version.
 func (a *V2API) PostRecordV2(w http.ResponseWriter, r *http.Request) {
+	// This endpoint always writes a new snapshot version.
+	//
+	// Request body matches v1 semantics:
+	// - key -> string sets/overwrites a value
+	// - key -> null deletes that key
 	ctx := r.Context()
 	id := mux.Vars(r)["id"]
 	idNumber, err := strconv.ParseInt(id, 10, 32)

@@ -11,6 +11,10 @@ import (
 
 // GET /records/{id}?version={n}&at={rfc3339}
 func (a *V2API) GetRecordV2(w http.ResponseWriter, r *http.Request) {
+	// Semantics:
+	// - If ?version is provided, return that exact snapshot.
+	// - Else if ?at is provided, return the latest snapshot at-or-before that time.
+	// - Else return the latest snapshot.
 	ctx := r.Context()
 	id := mux.Vars(r)["id"]
 
@@ -26,6 +30,7 @@ func (a *V2API) GetRecordV2(w http.ResponseWriter, r *http.Request) {
 	atStr := q.Get("at")
 
 	if versionStr != "" {
+		// Version takes precedence over time-travel if both are provided.
 		ver, err := strconv.ParseInt(versionStr, 10, 32)
 		if err != nil || ver <= 0 {
 			err := writeError(w, "invalid version; version must be a positive number", http.StatusBadRequest)
@@ -44,6 +49,7 @@ func (a *V2API) GetRecordV2(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if atStr != "" {
+		// Time-travel query (knowledge time).
 		at, err := time.Parse(time.RFC3339Nano, atStr)
 		if err != nil {
 			err := writeError(w, "invalid at; must be an RFC3339 timestamp", http.StatusBadRequest)

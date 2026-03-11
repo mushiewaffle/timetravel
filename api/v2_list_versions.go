@@ -10,6 +10,8 @@ import (
 
 // GET /records/{id}/versions
 func (a *V2API) ListRecordVersionsV2(w http.ResponseWriter, r *http.Request) {
+	// Returns a list of available snapshots for the record.
+	// This is primarily used by clients to discover which versions can be queried.
 	ctx := r.Context()
 	id := mux.Vars(r)["id"]
 
