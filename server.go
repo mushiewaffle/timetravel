@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -21,15 +22,31 @@ func logError(err error) {
 func main() {
 	router := mux.NewRouter()
 
-	service := service.NewInMemoryRecordService()
-	api := api.NewAPI(&service)
+	dbPath := os.Getenv("TIMETRAVEL_DB_PATH")
+	if dbPath == "" {
+		dbPath = "timetravel.db"
+	}
+
+	records, err := service.NewSQLiteRecordService(dbPath)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer func() {
+		logError(records.Close())
+	}()
+
+	v1api := api.NewAPI(records)
+	v2api := api.NewV2API(records)
 
 	apiRoute := router.PathPrefix("/api/v1").Subrouter()
 	apiRoute.Path("/health").HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		err := json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 		logError(err)
 	})
-	api.CreateRoutes(apiRoute)
+	v1api.CreateRoutes(apiRoute)
+
+	v2Route := router.PathPrefix("/api/v2").Subrouter()
+	v2api.CreateRoutes(v2Route)
 
 	address := "127.0.0.1:8000"
 	srv := &http.Server{
